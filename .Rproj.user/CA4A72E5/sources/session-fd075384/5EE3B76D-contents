@@ -1,24 +1,42 @@
 ---
-title: "DoubleML"
+title: "Double/Debiased Machine Learning"
 author: "Tom Ben-Shahar"
 format: pdf
 editor: visual
 ---
 
-# Double Debiased Machine Learning 
+# Basics 
 
-## Basics:
+Consider the following partially linear model:
 
-#### Problem:
+$$
+Y = \alpha D + g(X) + \epsilon
+$$
 
-Machine learning algorithms may be biased due to problems like overfitting, confounding, or really any source of bias.
+$$
+D = m(X) + v
+$$
 
-#### Solution:
+where
 
-(From ChatGPT)
+$Y$ :
 
-Fit two machine learning algorithms to predict outcome $\hat{Y}(X)$ and treatment $\hat{T}(X)$. Then calculate residuals from these predictions, $\tilde{Y} = Y - \hat{Y}(X)$ and $\tilde{T} = T - \hat{T}(X)$.
+:   Outcome of interest
 
-Then use these residuals to estimate the causal parameter $\hat{\theta}$ in the regression
+$D$ :
 
-$$\tilde{Y} = \theta \tilde{T} + \epsilon$$
+:   Treatment or policy variable of interest
+
+$X$ :
+
+:   High-dimensional vector of control variables
+
+$\epsilon, v$ : 
+
+:   Error terms
+
+$m, g$ : 
+
+:   Unknown "nuisance" functions
+
+## Naive Approach
