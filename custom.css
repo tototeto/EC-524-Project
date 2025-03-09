@@ -1,0 +1,27 @@
+.callout-note::before {
+    content: "💡";  /* Change this emoji to any symbol you like */
+    font-family: "Arial", sans-serif;  /* Ensures proper emoji rendering */
+    font-size: 1.2em; /* Adjust the size if needed */
+}
+
+
+/* Make bold text more prominent */
+strong, b {
+    font-weight: 700;  /* Use a heavier weight */
+    font-family: 'Arial', sans-serif;  /* Optional: Use a different font */
+	color: #907;
+}
+
+h2, h1, h3 {
+	color: #907;
+	text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);  /* Subtle shadow */
+	font-family: 'Roboto';  /* Change font for bold text */
+}
+
+header {
+	border-bottom: 3px double #907;  /* Blue underline */
+    padding-bottom: 5px;  /* Adds space between text and underline */
+	
+}
+
+
