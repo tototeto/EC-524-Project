@@ -8,9 +8,9 @@ format:
 editor: visual
 ---
 
-# Basics
+# Introduction 
 
-While traditional machine learning (ML) methods perform well in prediction, they tend to struggle with causal inference. In regression setting where unbiased estimators are needed for causal inference, Double/Debaised Machine Learning (DML) may allow us to obtain unbiased estimators through otherwise biased ML models.
+While traditional machine learning (ML) methods perform well in prediction, they tend to struggle with causal inference. In regression setting where unbiased estimators are needed for causal inference, Double/Debiased Machine Learning (DML) may allow us to obtain unbiased estimators through otherwise biased ML models.
 
 Consider the following partially linear model:
 
@@ -95,3 +95,75 @@ $$
 $$
 
 and regress $\hat \epsilon$ on $\hat v$ to obtain an **unbiased estimate of the causal parameter of interest** $\hat \alpha$. This method of using one regression to model residuals and a second regression on those residuals is where we get the name **Double Machine Learning**.
+
+# Example: R
+
+In R the package **DoubleML** can be used to implement DML models. The following code is interpreted from the **DoubleML** [documentation](https://docs.doubleml.org/stable/guide/basics.html). We can begin by generating our sample data.
+
+```{r}
+#| warning: false
+
+lgr::get_logger("mlr3")$set_threshold("warn")
+options(repr.plot.width=5, repr.plot.height=4)
+
+pacman::p_load(DoubleML, data.table, ggplot2, mlr3, mlr3learners)
+
+set.seed(36895189)
+n_rep = 1000
+n_obs = 500
+n_vars = 20
+alpha = 0.5
+
+data = list()
+for (i_rep in seq_len(n_rep)) {
+    data[[i_rep]] = make_plr_CCDDHNR2018(alpha=alpha, n_obs=n_obs, dim_x=n_vars,
+                                        return_type="data.frame")
+}
+
+non_orth_score = function(y, d, l_hat, m_hat, g_hat, smpls) {
+u_hat = y - g_hat
+psi_a = -1*d*d
+psi_b = d*u_hat
+psis = list(psi_a = psi_a, psi_b = psi_b)
+return(psis)
+}
+
+ml_l = lrn("regr.xgboost", nrounds = 300, eta = 0.1)
+ml_m = lrn("regr.xgboost", nrounds = 300, eta = 0.1)
+ml_g = ml_l$clone()
+
+theta_nonorth = rep(NA, n_rep)
+se_nonorth = rep(NA, n_rep)
+
+for (i_rep in seq_len(n_rep)) {
+    cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
+    flush.console()
+    df = data[[i_rep]]
+    obj_dml_data = double_ml_data_from_data_frame(df, y_col = "y", d_cols = "d")
+    obj_dml_plr_nonorth = DoubleMLPLR$new(obj_dml_data,
+                                        ml_l, ml_m, ml_g,
+                                        n_folds=2,
+                                        score=non_orth_score,
+                                        apply_cross_fitting=FALSE)
+    obj_dml_plr_nonorth$fit()
+    theta_nonorth[i_rep] = obj_dml_plr_nonorth$coef
+    se_nonorth[i_rep] = obj_dml_plr_nonorth$se
+}
+
+set.seed(36895189)
+g_nonorth = ggplot(data.frame(theta_rescaled=(theta_nonorth - alpha)/se_nonorth)) +
+                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Non-orthogonal ML", fill="Non-orthogonal ML"),
+                            bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Non-orthogonal ML", "N(0, 1)"),
+                    values=c("Non-orthogonal ML"="dark blue", "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Non-orthogonal ML", "N(0, 1)"),
+                    values=c("Non-orthogonal ML"="dark blue", "N(0, 1)"=NA)) +
+                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal()
+
+g_nonorth
+
+```

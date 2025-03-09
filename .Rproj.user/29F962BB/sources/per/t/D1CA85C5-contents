@@ -1,0 +1,169 @@
+---
+title: "Double/Debiased Machine Learning"
+author: "Tom Ben-Shahar"
+format: 
+  html:
+    css: custom.css
+    embed-resources: true
+editor: visual
+---
+
+# Introduction 
+
+While traditional machine learning (ML) methods perform well in prediction, they tend to struggle with causal inference. In regression setting where unbiased estimators are needed for causal inference, Double/Debiased Machine Learning (DML) may allow us to obtain unbiased estimators through otherwise biased ML models.
+
+Consider the following partially linear model:
+
+$$
+Y = \alpha D + g(X) + \epsilon
+$$
+
+$$
+D = m(X) + v
+$$
+
+where
+
+$Y$ :
+
+:   Outcome of interest
+
+$D$ :
+
+:   Treatment or policy variable of interest
+
+$X$ :
+
+:   High-dimensional vector of control variables
+
+$\alpha$ :
+
+:   Parameter targeted for estimation (treatment effect)
+
+$\epsilon, v$ :
+
+:   Error terms
+
+$m, g$ :
+
+:   Unknown "nuisance" functions
+
+In this model our treatment variable $D$ is correlated with $X$. This is often the case in economic settings where observational data is used. In these settings, our goal is to find the effect of $D$ on $Y$ that is not caused by correlation to $X$ .
+
+## Naive Approach
+
+To estimate the causal parameter $\alpha$, the given sample of data can be split into two smaller samples, which we can call the **main sample** and the **auxiliary sample**. We then use the auxiliary sample to train a simple ML model (e.g. random forest) to estimate the nuisance function $g(X)$ . Given the estimated function $\hat{g}(X)$, we can use the main sample to estimate the parameter $\alpha$ such that
+
+$$
+\hat{\alpha} = \left( \frac{1}{n} \sum_{i \in I_{main}}{D^2_i} \right)^{-1} \frac{1}{n} \sum_{i \in I_{main}}D_i (Y_i - \hat{g}(X_i))
+$$ {#eq-3}
+
+However, this naive approach introduces **regularization bias**. Put simply, the regressor $D$ is correlated with the control variables $X$. This causes the the estimated effect of $D$ (which is $\hat\alpha$) to be biased by the correlated effect of $X$. To solve this, we can decorrelate $D$ from $X$ . We call this step **orthogonalization**.
+
+::: callout
+### ❓ Regularization Bias
+
+Bias arises due to the slow convergence of $\hat \alpha$ relative to $\sqrt n$ . This means that as $n$ approaches infinity, $\hat \alpha$ diverges rather than converging to the true value $\alpha$.
+
+$$
+|\sqrt{n} (\hat{\alpha} - \alpha)|\to _{p} \infty
+$$
+
+A way to conceptualize how this bias affects our estimate is to consider a **ridge regression**, in which large coefficients are penalized to prevent overfitting. Such a method is excellent for prediction, but the downward bias presented by the penalty on large coefficients causes biased estimates that are generally invalid for causal inference. So, if our true parameter value is, say, $\alpha =3$, then while OLS may predict $\hat \alpha = 2.99$, a ridge regression may predict $\hat \alpha = 2.5$ regularization biases the estimate downward.
+:::
+
+## Orthogonalization
+
+Similarly to the naive approach, we can begin by splitting our data into main and auxiliary samples. We can then use the auxiliary sample to estimate both $\hat g(X)$ and $\hat m(X)$ . This is again done using a simple ML model. Given the estimated function $\hat m(X)$, we can use the main sample to estimate the **orthogonalized component** of $D$ by
+
+$$ \hat v = D - \hat m (X)$$This is the component of $D$ that is not biased by correlation with $X$. We can then use the main sample given the estimated $\hat v$ to better estimate the parameter $\alpha$ such that
+
+$$
+\hat{\alpha} = \left( \frac{1}{n} \sum_{i \in I_{main}}{\hat v_i D_i} \right)^{-1} \frac{1}{n} \sum_{i \in I_{main}}\hat v_i (Y_i - \hat{g}(X_i))
+$$
+
+The estimator is now **root-N consistent**, meaning the estimate $\hat \alpha$ converges to the true parameter $\alpha$ as $n$ grows towards infinity.
+
+Put more simply, we can use our auxiliary sample to predict $\hat Y$ and $\hat D$ over $X$ with an ML method like random forests. We can then take the residuals
+
+$$
+\hat \epsilon = Y - \hat{Y}
+$$
+
+$$
+\hat v = D - \hat D
+$$
+
+and regress $\hat \epsilon$ on $\hat v$ to obtain an **unbiased estimate of the causal parameter of interest** $\hat \alpha$. This method of using one regression to model residuals and a second regression on those residuals is where we get the name **Double Machine Learning**.
+
+# Example: R
+
+In R the package **DoubleML** can be used to implement DML models. The following code is interpreted from the **DoubleML** [documentation](https://docs.doubleml.org/stable/guide/basics.html). We can begin by generating our sample data.
+
+```{r}
+#| warning: false
+
+lgr::get_logger("mlr3")$set_threshold("warn")
+options(repr.plot.width=5, repr.plot.height=4)
+
+pacman::p_load(DoubleML, data.table, ggplot2, mlr3, mlr3learners)
+
+set.seed(36895189)
+n_rep = 1000
+n_obs = 500
+n_vars = 20
+alpha = 0.5
+
+data = list()
+for (i_rep in seq_len(n_rep)) {
+    data[[i_rep]] = make_plr_CCDDHNR2018(alpha=alpha, n_obs=n_obs, dim_x=n_vars,
+                                        return_type="data.frame")
+}
+
+non_orth_score = function(y, d, l_hat, m_hat, g_hat, smpls) {
+u_hat = y - g_hat
+psi_a = -1*d*d
+psi_b = d*u_hat
+psis = list(psi_a = psi_a, psi_b = psi_b)
+return(psis)
+}
+
+ml_l = lrn("regr.xgboost", nrounds = 300, eta = 0.1)
+ml_m = lrn("regr.xgboost", nrounds = 300, eta = 0.1)
+ml_g = ml_l$clone()
+
+theta_nonorth = rep(NA, n_rep)
+se_nonorth = rep(NA, n_rep)
+
+for (i_rep in seq_len(n_rep)) {
+    cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
+    flush.console()
+    df = data[[i_rep]]
+    obj_dml_data = double_ml_data_from_data_frame(df, y_col = "y", d_cols = "d")
+    obj_dml_plr_nonorth = DoubleMLPLR$new(obj_dml_data,
+                                        ml_l, ml_m, ml_g,
+                                        n_folds=2,
+                                        score=non_orth_score,
+                                        apply_cross_fitting=FALSE)
+    obj_dml_plr_nonorth$fit()
+    theta_nonorth[i_rep] = obj_dml_plr_nonorth$coef
+    se_nonorth[i_rep] = obj_dml_plr_nonorth$se
+}
+
+set.seed(36895189)
+g_nonorth = ggplot(data.frame(theta_rescaled=(theta_nonorth - alpha)/se_nonorth)) +
+                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Non-orthogonal ML", fill="Non-orthogonal ML"),
+                            bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Non-orthogonal ML", "N(0, 1)"),
+                    values=c("Non-orthogonal ML"="dark blue", "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Non-orthogonal ML", "N(0, 1)"),
+                    values=c("Non-orthogonal ML"="dark blue", "N(0, 1)"=NA)) +
+                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal()
+
+g_nonorth
+
+```
