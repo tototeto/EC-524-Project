@@ -3,7 +3,7 @@
     "path": "D:/School/2024-25 Masters/EC 524/EC-524-Project/project.qmd",
     "project_path": "project.qmd",
     "type": "quarto_markdown",
-    "hash": "0",
+    "hash": "1335330345",
     "contents": "",
     "dirty": false,
     "created": 1741471958548.0,
@@ -16,16 +16,16 @@
         "Source": "Source",
         "docOutlineVisible": "1",
         "rmdVisualCollapsedChunks": "",
-        "rmdVisualModeLocation": "11359:5442",
+        "rmdVisualModeLocation": "94:0",
         "cursorPosition": "169,0",
         "scrollLine": "156"
     },
     "folds": "",
-    "lastKnownWriteTime": 1741584984,
+    "lastKnownWriteTime": 1741585261,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1741584984170,
+    "last_content_update": 1741585261628,
     "read_only": false,
     "read_only_alternatives": []
 }
