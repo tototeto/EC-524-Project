@@ -6,9 +6,13 @@ format:
     css: custom.css
     embed-resources: true
 editor: visual
+knitr:
+  opts_chunk: 
+    cache: true
+    cache.lazy: false
 ---
 
-# Introduction 
+# Introduction
 
 While traditional machine learning (ML) methods perform well in prediction, they tend to struggle with causal inference. In regression setting where unbiased estimators are needed for causal inference, Double/Debiased Machine Learning (DML) may allow us to obtain unbiased estimators through otherwise biased ML models.
 
@@ -102,6 +106,7 @@ In R the package **DoubleML** can be used to implement DML models. The following
 
 ```{r}
 #| warning: false
+#| cache: true
 
 lgr::get_logger("mlr3")$set_threshold("warn")
 options(repr.plot.width=5, repr.plot.height=4)
@@ -136,7 +141,7 @@ theta_nonorth = rep(NA, n_rep)
 se_nonorth = rep(NA, n_rep)
 
 for (i_rep in seq_len(n_rep)) {
-    cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
+    #cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
     flush.console()
     df = data[[i_rep]]
     obj_dml_data = double_ml_data_from_data_frame(df, y_col = "y", d_cols = "d")
@@ -150,20 +155,174 @@ for (i_rep in seq_len(n_rep)) {
     se_nonorth[i_rep] = obj_dml_plr_nonorth$se
 }
 
+
+
+```
+
+```{r}
+#| cache: true
+#| warning: false
+
+
 set.seed(36895189)
 g_nonorth = ggplot(data.frame(theta_rescaled=(theta_nonorth - alpha)/se_nonorth)) +
-                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Non-orthogonal ML", fill="Non-orthogonal ML"),
+                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Non-orthogonal ML (Naive)", fill="Non-orthogonal ML (Naive)"),
                             bins = 30, alpha = 0.3) +
                 geom_vline(aes(xintercept = 0), col = "black") +
                 suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
                 scale_color_manual(name='',
-                    breaks=c("Non-orthogonal ML", "N(0, 1)"),
-                    values=c("Non-orthogonal ML"="dark blue", "N(0, 1)"='black')) +
+                    breaks=c("Non-orthogonal ML (Naive)", "N(0, 1)"),
+                    values=c("Non-orthogonal ML (Naive)"="dark blue", "N(0, 1)"='black')) +
                 scale_fill_manual(name='',
-                    breaks=c("Non-orthogonal ML", "N(0, 1)"),
-                    values=c("Non-orthogonal ML"="dark blue", "N(0, 1)"=NA)) +
-                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal()
+                    breaks=c("Non-orthogonal ML (Naive)", "N(0, 1)"),
+                    values=c("Non-orthogonal ML (Naive)"="dark blue", "N(0, 1)"=NA)) +
+                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal() +
+                labs(
+                  title = "Figure 1: Naive Approach"
+                )
 
 g_nonorth
+```
+
+Figure 1 shows the results of a ML model trained with the naive approach. The black solid curve denotes the true distribution given by our data generating process. Though the bias is not obvious, the figure demonstrates the shortcomings of this model. The estimates vary greatly, allowing for little confidence in the accuracy of our estimator.
+
+```{r}
+#| include: false
+#| echo: false
+#| cache: true
+#| eval: true
+
+set.seed(981651351)
+
+theta_orth_nosplit = rep(NA, n_rep)
+se_orth_nosplit = rep(NA, n_rep)
+
+for (i_rep in seq_len(n_rep)){
+    #cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
+    flush.console()
+    df = data[[i_rep]]
+    obj_dml_data = double_ml_data_from_data_frame(df, y_col = "y", d_cols = "d")
+    obj_dml_plr_orth_nosplit = DoubleMLPLR$new(obj_dml_data,
+                                        ml_l, ml_m, ml_g,
+                                        n_folds=1,
+                                        score='IV-type',
+                                        apply_cross_fitting=FALSE)
+    obj_dml_plr_orth_nosplit$fit()
+    theta_orth_nosplit[i_rep] = obj_dml_plr_orth_nosplit$coef
+    se_orth_nosplit[i_rep] = obj_dml_plr_orth_nosplit$se
+}
+
+g_nosplit = ggplot(data.frame(theta_rescaled=(theta_orth_nosplit - alpha)/se_orth_nosplit), aes(x = theta_rescaled)) +
+                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Double ML (no sample splitting)", fill="Double ML (no sample splitting)"),
+                            bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Double ML (no sample splitting)", "N(0, 1)"),
+                    values=c("Double ML (no sample splitting)"="dark orange", "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Double ML (no sample splitting)", "N(0, 1)"),
+                    values=c("Double ML (no sample splitting)"="dark orange", "N(0, 1)"=NA)) +
+                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal() +
+                labs(
+                  title = "Figure 2: Double ML Without Sample Splitting"
+                )
+
+g_nosplit
 
 ```
+
+```{r}
+#| cache: true
+#| message: false
+#| results: "hide"
+set.seed(564416489)
+
+theta_dml = rep(NA, n_rep)
+se_dml = rep(NA, n_rep)
+
+for (i_rep in seq_len(n_rep)) {
+    #cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
+    flush.console()
+    df = data[[i_rep]]
+    obj_dml_data = double_ml_data_from_data_frame(df, y_col = "y", d_cols = "d")
+    obj_dml_plr = DoubleMLPLR$new(obj_dml_data,
+                                ml_l, ml_m, ml_g,
+                                n_folds=2,
+                                score='IV-type')
+    obj_dml_plr$fit()
+    theta_dml[i_rep] = obj_dml_plr$coef
+    se_dml[i_rep] = obj_dml_plr$se
+}
+
+
+
+
+```
+
+```{r}
+
+g_dml = ggplot(data.frame(theta_rescaled=(theta_dml - alpha)/se_dml), aes(x = theta_rescaled)) +
+                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Double ML with cross-fitting", fill="Double ML with cross-fitting"),
+                            bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Double ML with cross-fitting", "N(0, 1)"),
+                    values=c("Double ML with cross-fitting"="dark green", "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Double ML with cross-fitting", "N(0, 1)"),
+                    values=c("Double ML with cross-fitting"="dark green", "N(0, 1)"=NA)) +
+                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal() +
+                labs(
+                  title = "Figure 2: Double ML With Sample Splitting"
+                )
+g_dml
+```
+
+Figure 2 shows the Double/Debiased ML approach, with sample splitting referring to the use of the auxiliary and main data splits. Visually, the model seems to much more accurately and precisely identify the correct range of values.
+
+```{r}
+#| warning: false
+g_all = ggplot(data.frame(t_nonorth=(theta_nonorth - alpha)/se_nonorth,
+                        t_orth_nosplit=(theta_orth_nosplit - alpha)/se_orth_nosplit,
+                        t_dml=(theta_dml - alpha)/se_dml)) +
+                geom_histogram(aes(x = t_nonorth, y=after_stat(density), colour = "Non-orthogonal ML (Naive)", fill="Non-orthogonal ML (Naive)"),
+                                bins = 30, alpha = 0.3) +
+                geom_histogram(aes(x = t_dml, y=after_stat(density), colour = "Double ML with cross-fitting", fill="Double ML with cross-fitting"),
+                                bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Non-orthogonal ML (Naive)", "Double ML (no sample splitting)", "Double ML with cross-fitting", "N(0, 1)"),
+                    values=c("Non-orthogonal ML (Naive)"="dark blue",
+                            "Double ML (no sample splitting)"="dark orange",
+                            "Double ML with cross-fitting"="dark green",
+                            "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Non-orthogonal ML (Naive)", "Double ML (no sample splitting)", "Double ML with cross-fitting", "N(0, 1)"),
+                    values=c("Non-orthogonal ML (Naive)"="dark blue",
+                            "Double ML (no sample splitting)"="dark orange",
+                            "Double ML with cross-fitting"="dark green",
+                            "N(0, 1)"=NA)) +
+            xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal()+
+            labs(
+              title = "Figure 3: Both Models"
+            )
+
+print(g_all)
+```
+
+Figure 3 shows both the naive and DoubleML models. While both appear to be centered correctly, there is no question that the DoubleML approach much more reliably captures the true distribution.
+
+::: {#bibliography}
+## Sources
+
+*The basics of Double/Debiased Machine Learning*. DoubleML documentation. (n.d.). https://docs.doubleml.org/stable/guide/basics.html
+
+Courthoud, M. (2022, June 6). *Double debiased machine learning (part 2)*. Towards Data Science. https://towardsdatascience.com/double-debiased-machine-learning-part-2-bf990720a0b2/#:\~:text=Double%2Ddebiased%20machine%20learning%20solves,Frisch%2DWaugh%2DLovell%20theorem.
+
+Chernozhukov , V. (2016, October 30). *Double Machine Learning for Causal and Treatment Effects*. YouTube. https://www.youtube.com/watch?v=eHOjmyoPCFU
+
+Victor Chernozhukov, Denis Chetverikov, Mert Demirer, Esther Duflo, Christian Hansen, Whitney Newey, James Robins, Double/debiased machine learning for treatment and structural parameters, *The Econometrics Journal*, Volume 21, Issue 1, 1 February 2018, Pages C1–C68, <https://doi.org/10.1111/ectj.12097>
+:::

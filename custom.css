@@ -24,4 +24,6 @@ header {
 	
 }
 
-
+.figure  {
+	border: 3px double #907;
+}

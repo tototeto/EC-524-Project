@@ -1,0 +1,328 @@
+---
+title: "Double/Debiased Machine Learning"
+author: "Tom Ben-Shahar"
+format: 
+  html:
+    css: custom.css
+    embed-resources: true
+editor: visual
+knitr:
+  opts_chunk: 
+    cache: true
+    cache.lazy: false
+---
+
+# Introduction
+
+While traditional machine learning (ML) methods perform well in prediction, they tend to struggle with causal inference. In regression setting where unbiased estimators are needed for causal inference, Double/Debiased Machine Learning (DML) may allow us to obtain unbiased estimators through otherwise biased ML models.
+
+Consider the following partially linear model:
+
+$$
+Y = \alpha D + g(X) + \epsilon
+$$
+
+$$
+D = m(X) + v
+$$
+
+where
+
+$Y$ :
+
+:   Outcome of interest
+
+$D$ :
+
+:   Treatment or policy variable of interest
+
+$X$ :
+
+:   High-dimensional vector of control variables
+
+$\alpha$ :
+
+:   Parameter targeted for estimation (treatment effect)
+
+$\epsilon, v$ :
+
+:   Error terms
+
+$m, g$ :
+
+:   Unknown "nuisance" functions
+
+In this model our treatment variable $D$ is correlated with $X$. This is often the case in economic settings where observational data is used. In these settings, our goal is to find the effect of $D$ on $Y$ that is not caused by correlation to $X$ .
+
+## Naive Approach
+
+To estimate the causal parameter $\alpha$, the given sample of data can be split into two smaller samples, which we can call the **main sample** and the **auxiliary sample**. We then use the auxiliary sample to train a simple ML model (e.g. random forest) to estimate the nuisance function $g(X)$ . Given the estimated function $\hat{g}(X)$, we can use the main sample to estimate the parameter $\alpha$ such that
+
+$$
+\hat{\alpha} = \left( \frac{1}{n} \sum_{i \in I_{main}}{D^2_i} \right)^{-1} \frac{1}{n} \sum_{i \in I_{main}}D_i (Y_i - \hat{g}(X_i))
+$$ {#eq-3}
+
+However, this naive approach introduces **regularization bias**. Put simply, the regressor $D$ is correlated with the control variables $X$. This causes the the estimated effect of $D$ (which is $\hat\alpha$) to be biased by the correlated effect of $X$. To solve this, we can decorrelate $D$ from $X$ . We call this step **orthogonalization**.
+
+::: callout
+### ❓ Regularization Bias
+
+Bias arises due to the slow convergence of $\hat \alpha$ relative to $\sqrt n$ . This means that as $n$ approaches infinity, $\hat \alpha$ diverges rather than converging to the true value $\alpha$.
+
+$$
+|\sqrt{n} (\hat{\alpha} - \alpha)|\to _{p} \infty
+$$
+
+A way to conceptualize how this bias affects our estimate is to consider a **ridge regression**, in which large coefficients are penalized to prevent overfitting. Such a method is excellent for prediction, but the downward bias presented by the penalty on large coefficients causes biased estimates that are generally invalid for causal inference. So, if our true parameter value is, say, $\alpha =3$, then while OLS may predict $\hat \alpha = 2.99$, a ridge regression may predict $\hat \alpha = 2.5$ regularization biases the estimate downward.
+:::
+
+## Orthogonalization
+
+Similarly to the naive approach, we can begin by splitting our data into main and auxiliary samples. We can then use the auxiliary sample to estimate both $\hat g(X)$ and $\hat m(X)$ . This is again done using a simple ML model. Given the estimated function $\hat m(X)$, we can use the main sample to estimate the **orthogonalized component** of $D$ by
+
+$$ \hat v = D - \hat m (X)$$This is the component of $D$ that is not biased by correlation with $X$. We can then use the main sample given the estimated $\hat v$ to better estimate the parameter $\alpha$ such that
+
+$$
+\hat{\alpha} = \left( \frac{1}{n} \sum_{i \in I_{main}}{\hat v_i D_i} \right)^{-1} \frac{1}{n} \sum_{i \in I_{main}}\hat v_i (Y_i - \hat{g}(X_i))
+$$
+
+The estimator is now **root-N consistent**, meaning the estimate $\hat \alpha$ converges to the true parameter $\alpha$ as $n$ grows towards infinity.
+
+Put more simply, we can use our auxiliary sample to predict $\hat Y$ and $\hat D$ over $X$ with an ML method like random forests. We can then take the residuals
+
+$$
+\hat \epsilon = Y - \hat{Y}
+$$
+
+$$
+\hat v = D - \hat D
+$$
+
+and regress $\hat \epsilon$ on $\hat v$ to obtain an **unbiased estimate of the causal parameter of interest** $\hat \alpha$. This method of using one regression to model residuals and a second regression on those residuals is where we get the name **Double Machine Learning**.
+
+# Example: R
+
+In R the package **DoubleML** can be used to implement DML models. The following code is interpreted from the **DoubleML** [documentation](https://docs.doubleml.org/stable/guide/basics.html). We can begin by generating our sample data.
+
+```{r}
+#| warning: false
+#| cache: true
+
+lgr::get_logger("mlr3")$set_threshold("warn")
+options(repr.plot.width=5, repr.plot.height=4)
+
+pacman::p_load(DoubleML, data.table, ggplot2, mlr3, mlr3learners)
+
+set.seed(36895189)
+n_rep = 1000
+n_obs = 500
+n_vars = 20
+alpha = 0.5
+
+data = list()
+for (i_rep in seq_len(n_rep)) {
+    data[[i_rep]] = make_plr_CCDDHNR2018(alpha=alpha, n_obs=n_obs, dim_x=n_vars,
+                                        return_type="data.frame")
+}
+
+non_orth_score = function(y, d, l_hat, m_hat, g_hat, smpls) {
+u_hat = y - g_hat
+psi_a = -1*d*d
+psi_b = d*u_hat
+psis = list(psi_a = psi_a, psi_b = psi_b)
+return(psis)
+}
+
+ml_l = lrn("regr.xgboost", nrounds = 300, eta = 0.1)
+ml_m = lrn("regr.xgboost", nrounds = 300, eta = 0.1)
+ml_g = ml_l$clone()
+
+theta_nonorth = rep(NA, n_rep)
+se_nonorth = rep(NA, n_rep)
+
+for (i_rep in seq_len(n_rep)) {
+    #cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
+    flush.console()
+    df = data[[i_rep]]
+    obj_dml_data = double_ml_data_from_data_frame(df, y_col = "y", d_cols = "d")
+    obj_dml_plr_nonorth = DoubleMLPLR$new(obj_dml_data,
+                                        ml_l, ml_m, ml_g,
+                                        n_folds=2,
+                                        score=non_orth_score,
+                                        apply_cross_fitting=FALSE)
+    obj_dml_plr_nonorth$fit()
+    theta_nonorth[i_rep] = obj_dml_plr_nonorth$coef
+    se_nonorth[i_rep] = obj_dml_plr_nonorth$se
+}
+
+
+
+```
+
+```{r}
+#| cache: true
+#| warning: false
+
+
+set.seed(36895189)
+g_nonorth = ggplot(data.frame(theta_rescaled=(theta_nonorth - alpha)/se_nonorth)) +
+                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Non-orthogonal ML (Naive)", fill="Non-orthogonal ML (Naive)"),
+                            bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Non-orthogonal ML (Naive)", "N(0, 1)"),
+                    values=c("Non-orthogonal ML (Naive)"="dark blue", "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Non-orthogonal ML (Naive)", "N(0, 1)"),
+                    values=c("Non-orthogonal ML (Naive)"="dark blue", "N(0, 1)"=NA)) +
+                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal() +
+                labs(
+                  title = "Figure 1: Naive Approach"
+                )
+
+g_nonorth
+```
+
+Figure 1 shows the results of a ML model trained with the naive approach. The black solid curve denotes the true distribution given by our data generating process. Though the bias is not obvious, the figure demonstrates the shortcomings of this model. The estimates vary greatly, allowing for little confidence in the accuracy of our estimator.
+
+```{r}
+#| include: false
+#| echo: false
+#| cache: true
+#| eval: true
+
+set.seed(981651351)
+
+theta_orth_nosplit = rep(NA, n_rep)
+se_orth_nosplit = rep(NA, n_rep)
+
+for (i_rep in seq_len(n_rep)){
+    #cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
+    flush.console()
+    df = data[[i_rep]]
+    obj_dml_data = double_ml_data_from_data_frame(df, y_col = "y", d_cols = "d")
+    obj_dml_plr_orth_nosplit = DoubleMLPLR$new(obj_dml_data,
+                                        ml_l, ml_m, ml_g,
+                                        n_folds=1,
+                                        score='IV-type',
+                                        apply_cross_fitting=FALSE)
+    obj_dml_plr_orth_nosplit$fit()
+    theta_orth_nosplit[i_rep] = obj_dml_plr_orth_nosplit$coef
+    se_orth_nosplit[i_rep] = obj_dml_plr_orth_nosplit$se
+}
+
+g_nosplit = ggplot(data.frame(theta_rescaled=(theta_orth_nosplit - alpha)/se_orth_nosplit), aes(x = theta_rescaled)) +
+                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Double ML (no sample splitting)", fill="Double ML (no sample splitting)"),
+                            bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Double ML (no sample splitting)", "N(0, 1)"),
+                    values=c("Double ML (no sample splitting)"="dark orange", "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Double ML (no sample splitting)", "N(0, 1)"),
+                    values=c("Double ML (no sample splitting)"="dark orange", "N(0, 1)"=NA)) +
+                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal() +
+                labs(
+                  title = "Figure 2: Double ML Without Sample Splitting"
+                )
+
+g_nosplit
+
+```
+
+```{r}
+#| cache: true
+#| message: false
+#| results: "hide"
+set.seed(564416489)
+
+theta_dml = rep(NA, n_rep)
+se_dml = rep(NA, n_rep)
+
+for (i_rep in seq_len(n_rep)) {
+    #cat(sprintf("Replication %d/%d", i_rep, n_rep), "\r", sep="")
+    flush.console()
+    df = data[[i_rep]]
+    obj_dml_data = double_ml_data_from_data_frame(df, y_col = "y", d_cols = "d")
+    obj_dml_plr = DoubleMLPLR$new(obj_dml_data,
+                                ml_l, ml_m, ml_g,
+                                n_folds=2,
+                                score='IV-type')
+    obj_dml_plr$fit()
+    theta_dml[i_rep] = obj_dml_plr$coef
+    se_dml[i_rep] = obj_dml_plr$se
+}
+
+
+
+
+```
+
+```{r}
+
+g_dml = ggplot(data.frame(theta_rescaled=(theta_dml - alpha)/se_dml), aes(x = theta_rescaled)) +
+                geom_histogram(aes(y=after_stat(density), x=theta_rescaled, colour = "Double ML with cross-fitting", fill="Double ML with cross-fitting"),
+                            bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Double ML with cross-fitting", "N(0, 1)"),
+                    values=c("Double ML with cross-fitting"="dark green", "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Double ML with cross-fitting", "N(0, 1)"),
+                    values=c("Double ML with cross-fitting"="dark green", "N(0, 1)"=NA)) +
+                xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal() +
+                labs(
+                  title = "Figure 2: Double ML With Sample Splitting"
+                )
+g_dml
+```
+
+Figure 2 shows the Double/Debiased ML approach, with sample splitting referring to the use of the auxiliary and main data splits. Visually, the model seems to much more accurately and precisely identify the correct range of values.
+
+```{r}
+#| warning: false
+g_all = ggplot(data.frame(t_nonorth=(theta_nonorth - alpha)/se_nonorth,
+                        t_orth_nosplit=(theta_orth_nosplit - alpha)/se_orth_nosplit,
+                        t_dml=(theta_dml - alpha)/se_dml)) +
+                geom_histogram(aes(x = t_nonorth, y=after_stat(density), colour = "Non-orthogonal ML (Naive)", fill="Non-orthogonal ML (Naive)"),
+                                bins = 30, alpha = 0.3) +
+                geom_histogram(aes(x = t_dml, y=after_stat(density), colour = "Double ML with cross-fitting", fill="Double ML with cross-fitting"),
+                                bins = 30, alpha = 0.3) +
+                geom_vline(aes(xintercept = 0), col = "black") +
+                suppressWarnings(geom_function(fun = dnorm, aes(colour = "N(0, 1)", fill="N(0, 1)"))) +
+                scale_color_manual(name='',
+                    breaks=c("Non-orthogonal ML (Naive)", "Double ML (no sample splitting)", "Double ML with cross-fitting", "N(0, 1)"),
+                    values=c("Non-orthogonal ML (Naive)"="dark blue",
+                            "Double ML (no sample splitting)"="dark orange",
+                            "Double ML with cross-fitting"="dark green",
+                            "N(0, 1)"='black')) +
+                scale_fill_manual(name='',
+                    breaks=c("Non-orthogonal ML (Naive)", "Double ML (no sample splitting)", "Double ML with cross-fitting", "N(0, 1)"),
+                    values=c("Non-orthogonal ML (Naive)"="dark blue",
+                            "Double ML (no sample splitting)"="dark orange",
+                            "Double ML with cross-fitting"="dark green",
+                            "N(0, 1)"=NA)) +
+            xlim(c(-6.0, 6.0)) + xlab("") + ylab("") + theme_minimal()+
+            labs(
+              title = "Figure 3: Both Models"
+            )
+
+print(g_all)
+```
+
+Figure 3 shows both the naive and DoubleML models. While both appear to be centered correctly, there is no question that the DoubleML approach much more reliably captures the true distribution.
+
+::: {#bibliography}
+## Sources
+
+*The basics of Double/Debiased Machine Learning*. DoubleML documentation. (n.d.). https://docs.doubleml.org/stable/guide/basics.html
+
+Courthoud, M. (2022, June 6). *Double debiased machine learning (part 2)*. Towards Data Science. https://towardsdatascience.com/double-debiased-machine-learning-part-2-bf990720a0b2/#:\~:text=Double%2Ddebiased%20machine%20learning%20solves,Frisch%2DWaugh%2DLovell%20theorem.
+
+Chernozhukov , V. (2016, October 30). *Double Machine Learning for Causal and Treatment Effects*. YouTube. https://www.youtube.com/watch?v=eHOjmyoPCFU
+
+Victor Chernozhukov, Denis Chetverikov, Mert Demirer, Esther Duflo, Christian Hansen, Whitney Newey, James Robins, Double/debiased machine learning for treatment and structural parameters, *The Econometrics Journal*, Volume 21, Issue 1, 1 February 2018, Pages C1–C68, <https://doi.org/10.1111/ectj.12097>
+:::
