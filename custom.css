@@ -4,6 +4,10 @@
     font-size: 1.2em; /* Adjust the size if needed */
 }
 
+.callout {
+	border: 2px solid #222;
+}
+
 
 /* Make bold text more prominent */
 strong, b {
@@ -12,9 +16,16 @@ strong, b {
 	color: #907;
 }
 
-h2, h1, h3 {
+h2:not(header h2), h1:not(header h1), h3  {
 	color: #907;
 	text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);  /* Subtle shadow */
+	font-family: 'Roboto';  /* Change font for bold text */
+	border-bottom: 1px solid #907;
+}
+
+header h1{
+	color: #907;
+	text-shadow: 1.5px 1.5px 2.5px rgba(0, 0, 0, 0.3);  /* Subtle shadow */
 	font-family: 'Roboto';  /* Change font for bold text */
 }
 
@@ -27,3 +38,5 @@ header {
 .figure  {
 	border: 3px double #907;
 }
+
+
